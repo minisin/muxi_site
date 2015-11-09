@@ -63,7 +63,7 @@
                  body_html                  Text                                           博客内容的html格式
                  timestamp                  datetime                                       时间戳
                  author.id                  Integer, ForeignKey                            博客对应作者的id
-                 comments                   relationship                                   该博客下的评论                            
+                 comments                   relationship                                   该博客下的评论
 
 """
 
@@ -71,6 +71,7 @@ from . import db, login_manager, app
 from flask import current_app
 from flask.ext.login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask.ext.login import AnonymousUserMixin
 from datetime import datetime
 import sys
 import bleach
@@ -158,7 +159,7 @@ class Book(db.Model):
         return "%r :The instance of class Book" % self.name
 
 
-class User(db.Model, UserMixin):
+class User(UserMixin, db.Model):
     """用户类"""
     __tablename__ = "users"
     id = db.Column(db.Integer, primary_key = True)
@@ -181,11 +182,9 @@ class User(db.Model, UserMixin):
             if self.role is None:
                 self.role = Role.query.filter_by(default=True).first()
 
-    @login_manager.user_loader
-    def load_user(user_id):
-        """flask-login要求实现的用户加载回调函数
-           依据用户的unicode字符串的id加载用户"""
-        return User.query.get(int(user_id))
+    def can(self, permissions):
+		"""判断用户的权限"""
+		return self.role is not None and (self.role.permissions & permissions) == permissions
 
     @property
     def password(self):
@@ -205,6 +204,28 @@ class User(db.Model, UserMixin):
         return "%r :The instance of class User" % self.username
 
 
+class AnonymousUser(AnonymousUserMixin):
+	"""
+	匿名用户类
+	谁叫你匿名，什么权限都没有
+	"""
+	def can(self, permissions):
+		return False
+
+	def is_administrator(self):
+		return False
+
+
+login_manager.anonymous_user = AnonymousUser
+
+
+@login_manager.user_loader
+def load_user(user_id):
+	"""flask-login要求实现的用户加载回调函数
+		依据用户的unicode字符串的id加载用户"""
+	return User.query.get(int(user_id))
+
+
 if enable_search:
     whooshalchemy.whoosh_index(app, Book)
 
@@ -217,7 +238,7 @@ class Share(db.Model):
     share = db.Column(db.Text)
     timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow)
     author_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    comment = db.relationship('Comment', backref='share', lazy='dynamic')
+    comment = db.relationship('Comment', backref='shares', lazy='dynamic')
 
     @staticmethod
     def generate_fake(count=10):
@@ -275,6 +296,7 @@ class Comment(db.Model):
     def __repr__(self):
         return "<the instance of model Comment>"
 
+
 class Blog(db.Model):
     """博客类"""
     __tablename__ = 'blogs'
@@ -310,32 +332,6 @@ class Blog(db.Model):
         target.body_html = bleach.linkify(bleach.clean(
             markdown(value, output_format='html'),
             tags=allowed_tags, strip=True))
-
-"""
-    def to_json(self):
-        #编写json字典
-        json_post = {
-            'url': url_for('api.get_blog', id=self.id, _external=True),
-            #url部分因为还不知道视图函数名 先编了一个
-            'body': self.body,
-            'body_html': self.body_html,
-            'timestamp': self.timestamp,
-            'author': url_for('api.get_user', id=self.author_id,
-                              _external=True),
-            'comments': url_for('api.get_blog_comments', id=self.id,
-                                _external=True),
-            'comment_count': self.comments.count()
-        }
-        return json_blog
-
-    @staticmethod
-    def from_json(json_post):
-        #该函数可以修改json字典的内容
-        body = json_blog.get('body')
-        if body is None or body == '':
-            raise ValidationError('post does not have a body')
-        return Blog(body=body)
-"""
 
 db.event.listen(Blog.body, 'set', Blog.on_changed_body)
 #用于监听markdown编辑器
